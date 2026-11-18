@@ -182,6 +182,8 @@ Guessing a household ID, or even knowing the code, never grants membership.
 
 ## 6. Demo checklist (Account A, Account B in the same household, Account C as an outsider)
 
+For the full step-by-step emulator test plan (about 70 checks with expected results), see [docs/MANUAL_TEST_PLAN.md](docs/MANUAL_TEST_PLAN.md).
+
 Use two phones or emulators, or sign out and back in on one.
 
 - [ ] **Fresh launch:** clear app data → Login screen.
