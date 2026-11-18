@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Firebase config (public repo; keep project identifiers out of git)
+google-services.json
