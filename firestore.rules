@@ -1,0 +1,240 @@
+rules_version = '2';
+
+// RoomEase Firestore security rules (Spark plan: no Cloud Functions, no Cloud Storage).
+// Everything is denied unless a rule below allows it. There is no catch-all match.
+// Rules are not filters: the app always queries inside households/{hid}/..., which these rules check.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function data() { return request.resource.data; }
+    function changedKeys() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function str(v, minLen, maxLen) { return v is string && v.size() >= minLen && v.size() <= maxLen; }
+
+    function userDoc(u) { return /databases/$(database)/documents/users/$(u); }
+    function householdDoc(hid) { return /databases/$(database)/documents/households/$(hid); }
+    function memberDoc(hid, u) { return /databases/$(database)/documents/households/$(hid)/members/$(u); }
+    function joinRequestDoc(hid, u) { return /databases/$(database)/documents/households/$(hid)/joinRequests/$(u); }
+    function inviteDoc(code) { return /databases/$(database)/documents/inviteCodes/$(code); }
+
+    // members/{uid} is the only authority for membership. users/{uid}.householdId is never trusted for access.
+    function isMember(hid) { return signedIn() && exists(memberDoc(hid, me())); }
+    function isMemberUid(hid, u) { return u is string && exists(memberDoc(hid, u)); }
+    function isOwner(hid) { return signedIn() && get(householdDoc(hid)).data.ownerId == me(); }
+
+    // Up to 8 participants per expense, each must be a current member.
+    // (1 membership check for the caller + 8 here stays within the 10-document limit for a single write.)
+    function participantsAreMembers(hid, ids) {
+      return (ids.size() < 1 || isMemberUid(hid, ids[0]))
+          && (ids.size() < 2 || isMemberUid(hid, ids[1]))
+          && (ids.size() < 3 || isMemberUid(hid, ids[2]))
+          && (ids.size() < 4 || isMemberUid(hid, ids[3]))
+          && (ids.size() < 5 || isMemberUid(hid, ids[4]))
+          && (ids.size() < 6 || isMemberUid(hid, ids[5]))
+          && (ids.size() < 7 || isMemberUid(hid, ids[6]))
+          && (ids.size() < 8 || isMemberUid(hid, ids[7]));
+    }
+
+    // ---------- users/{uid}: private routing document ----------
+    match /users/{userId} {
+      allow get: if signedIn() && me() == userId;
+      allow list: if false;
+
+      allow create: if signedIn() && me() == userId
+        && data().keys().hasOnly(['uid', 'displayName', 'email', 'householdId', 'pendingHouseholdId', 'createdAt'])
+        && data().keys().hasAll(['uid', 'displayName', 'email', 'householdId', 'createdAt'])
+        && data().uid == userId
+        && str(data().displayName, 1, 50)
+        && str(data().email, 0, 120)
+        && data().householdId == null
+        && data().get('pendingHouseholdId', null) == null
+        && data().createdAt == request.time;
+
+      // householdId is navigation state, but it may only move from null to a household
+      // where this account is (after the same batch) a real member. No leaving/switching in the MVP.
+      allow update: if signedIn() && me() == userId
+        && changedKeys().hasOnly(['displayName', 'householdId', 'pendingHouseholdId'])
+        && str(data().displayName, 1, 50)
+        && (data().get('pendingHouseholdId', null) == null || str(data().pendingHouseholdId, 1, 128))
+        && (!('householdId' in changedKeys())
+            || (resource.data.householdId == null
+                && data().householdId is string
+                && existsAfter(memberDoc(data().householdId, userId))));
+
+      allow delete: if false;
+    }
+
+    // ---------- inviteCodes/{code}: lookup from code to household ----------
+    // Any signed-in user may read ONE code they typed (no listing). Knowing it only lets them ASK to join.
+    match /inviteCodes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && code.matches('^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$')
+        && data().keys().hasOnly(['householdId', 'householdName', 'ownerId', 'createdAt'])
+        && data().keys().hasAll(['householdId', 'householdName', 'ownerId', 'createdAt'])
+        && data().ownerId == me()
+        && str(data().householdId, 1, 128)
+        && str(data().householdName, 1, 60)
+        && data().createdAt == request.time
+        && getAfter(householdDoc(data().householdId)).data.ownerId == me()
+        && getAfter(householdDoc(data().householdId)).data.inviteCode == code;
+      allow update, delete: if false; // an existing code can never be overwritten or hijacked
+    }
+
+    // ---------- households/{hid} ----------
+    match /households/{hid} {
+      allow get: if isMember(hid);
+      allow list: if false;
+
+      // Created in one batch with the owner's member doc and the invite code doc.
+      allow create: if signedIn()
+        && data().keys().hasOnly(['name', 'ownerId', 'inviteCode', 'createdAt'])
+        && data().keys().hasAll(['name', 'ownerId', 'inviteCode', 'createdAt'])
+        && data().ownerId == me()
+        && str(data().name, 1, 60)
+        && str(data().inviteCode, 6, 6)
+        && data().createdAt == request.time
+        && existsAfter(memberDoc(hid, me()))
+        && getAfter(inviteDoc(data().inviteCode)).data.householdId == hid;
+
+      allow update: if isOwner(hid)
+        && changedKeys().hasOnly(['name'])
+        && str(data().name, 1, 60);
+      allow delete: if false;
+
+      // ----- members/{uid}: the membership authority -----
+      match /members/{memberId} {
+        // You can always check your OWN membership doc (that's how the app routes); members see the roster.
+        allow get: if signedIn() && (me() == memberId || isMember(hid));
+        allow list: if isMember(hid);
+
+        allow create: if signedIn() && me() == memberId
+          && data().keys().hasOnly(['uid', 'displayName', 'role', 'joinedAt'])
+          && data().keys().hasAll(['uid', 'displayName', 'role', 'joinedAt'])
+          && data().uid == memberId
+          && str(data().displayName, 1, 50)
+          && data().joinedAt == request.time
+          // One household per account: not in a household before this batch, pointed here after it.
+          && get(userDoc(memberId)).data.householdId == null
+          && getAfter(userDoc(memberId)).data.householdId == hid
+          && (
+            // (a) the founding owner, written in the same batch that creates the household
+            (data().role == 'owner'
+              && !exists(householdDoc(hid))
+              && getAfter(householdDoc(hid)).data.ownerId == memberId)
+            ||
+            // (b) a roommate whose join request (doc id = their uid) the owner approved
+            (data().role == 'member'
+              && get(joinRequestDoc(hid, memberId)).data.status == 'approved')
+          );
+
+        // Roles and membership can't be edited or removed from the client in the MVP.
+        allow update, delete: if false;
+      }
+
+      // ----- joinRequests/{uid}: owner-approved invites tied to one account -----
+      match /joinRequests/{requesterId} {
+        allow get: if signedIn() && (me() == requesterId || isOwner(hid));
+        allow list: if isOwner(hid);
+
+        allow create: if signedIn() && me() == requesterId
+          && data().keys().hasOnly(['uid', 'displayName', 'email', 'code', 'status', 'createdAt'])
+          && data().keys().hasAll(['uid', 'displayName', 'email', 'code', 'status', 'createdAt'])
+          && data().uid == requesterId
+          && str(data().displayName, 1, 50)
+          && str(data().email, 0, 120)
+          && data().status == 'pending'
+          && data().createdAt == request.time
+          && str(data().code, 6, 6)
+          // must hold the real code for THIS household; a guessed household id alone is useless
+          && get(inviteDoc(data().code)).data.householdId == hid
+          && !exists(memberDoc(hid, requesterId))
+          && get(userDoc(requesterId)).data.householdId == null;
+
+        // Only the owner decides, only once, and only these fields change.
+        allow update: if isOwner(hid)
+          && resource.data.status == 'pending'
+          && changedKeys().hasOnly(['status', 'decidedBy', 'decidedAt'])
+          && data().status in ['approved', 'declined']
+          && data().decidedBy == me()
+          && data().decidedAt == request.time;
+
+        // The requester can withdraw; the owner can clear it.
+        allow delete: if signedIn() && (me() == requesterId || isOwner(hid));
+      }
+
+      // ----- chores -----
+      match /chores/{choreId} {
+        allow read: if isMember(hid);
+
+        allow create: if isMember(hid)
+          && data().keys().hasOnly(['title', 'assigneeId', 'assigneeName', 'createdBy', 'createdByName', 'dueDate', 'done', 'completedAt', 'createdAt'])
+          && data().keys().hasAll(['title', 'assigneeId', 'assigneeName', 'createdBy', 'createdByName', 'dueDate', 'done', 'completedAt', 'createdAt'])
+          && data().createdBy == me()
+          && str(data().title, 1, 80)
+          && str(data().assigneeName, 1, 50)
+          && str(data().createdByName, 1, 50)
+          && isMemberUid(hid, data().assigneeId)
+          && data().dueDate is timestamp
+          && data().done == false
+          && data().completedAt == null
+          && data().createdAt == request.time;
+
+        // Only the assignee can mark it done (or undo), and only done/completedAt change.
+        // createdBy, assigneeId and every other field are immutable.
+        allow update: if isMember(hid)
+          && me() == resource.data.assigneeId
+          && changedKeys().hasOnly(['done', 'completedAt'])
+          && data().done is bool
+          && ((data().done == true && data().completedAt == request.time)
+              || (data().done == false && data().completedAt == null));
+
+        allow delete: if isMember(hid) && (me() == resource.data.createdBy || isOwner(hid));
+      }
+
+      // ----- expenses (money in integer cents; receipt image bytes never stored here) -----
+      match /expenses/{expenseId} {
+        allow read: if isMember(hid);
+
+        allow create: if isMember(hid)
+          && data().keys().hasOnly(['description', 'merchant', 'totalCents', 'paidBy', 'paidByName', 'participantIds', 'hasReceipt', 'createdAt'])
+          && data().keys().hasAll(['description', 'merchant', 'totalCents', 'paidBy', 'paidByName', 'participantIds', 'hasReceipt', 'createdAt'])
+          && data().paidBy == me()
+          && str(data().description, 1, 80)
+          && str(data().merchant, 0, 80)
+          && str(data().paidByName, 1, 50)
+          && data().totalCents is int
+          && data().totalCents > 0
+          && data().totalCents <= 100000000
+          && data().participantIds is list
+          && data().participantIds.size() >= 1
+          && data().participantIds.size() <= 8
+          && data().participantIds.toSet().size() == data().participantIds.size()
+          && participantsAreMembers(hid, data().participantIds)
+          && data().hasReceipt is bool
+          && data().createdAt == request.time;
+
+        allow update: if false; // the ledger is append-only
+        allow delete: if isMember(hid) && me() == resource.data.paidBy;
+      }
+
+      // ----- messages -----
+      match /messages/{messageId} {
+        allow read: if isMember(hid);
+
+        allow create: if isMember(hid)
+          && data().keys().hasOnly(['text', 'senderId', 'senderName', 'createdAt'])
+          && data().keys().hasAll(['text', 'senderId', 'senderName', 'createdAt'])
+          && data().senderId == me()        // no forged senders
+          && str(data().text, 1, 1000)
+          && str(data().senderName, 1, 50)
+          && data().createdAt == request.time;
+
+        allow update, delete: if false;
+      }
+    }
+  }
+}

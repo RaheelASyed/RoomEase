@@ -16,3 +16,8 @@ local.properties
 
 # Firebase config (public repo; keep project identifiers out of git)
 google-services.json
+
+# Firebase emulator logs
+firebase-debug.log
+firestore-debug.log
+ui-debug.log

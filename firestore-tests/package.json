@@ -1,0 +1,14 @@
+{
+  "name": "roomease-firestore-rules-tests",
+  "private": true,
+  "type": "module",
+  "description": "Security rule tests for RoomEase. Runs only against the local Firestore emulator (demo project, no live data).",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-roomease --config ../firebase.json \"node --test rules.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "6.0.0",
+    "firebase": "13.4.0",
+    "firebase-tools": "15.36.0"
+  }
+}
