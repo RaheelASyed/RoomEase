@@ -63,6 +63,7 @@ import edu.virginia.cs4720.roomease.ui.components.Avatar
 import edu.virginia.cs4720.roomease.ui.components.EmptyState
 import edu.virginia.cs4720.roomease.ui.components.ErrorState
 import edu.virginia.cs4720.roomease.ui.components.LoadingState
+import edu.virginia.cs4720.roomease.ui.components.ProfileAvatarButton
 import edu.virginia.cs4720.roomease.ui.components.ScreenHeader
 import edu.virginia.cs4720.roomease.ui.components.hasPermission
 import edu.virginia.cs4720.roomease.ui.session.SessionState
@@ -71,7 +72,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 @Composable
-fun ChatRoute(session: SessionState.Ready) {
+fun ChatRoute(session: SessionState.Ready, onOpenSettings: () -> Unit) {
     val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.factory(session.householdId, session.uid, session.myName))
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -91,6 +92,7 @@ fun ChatRoute(session: SessionState.Ready) {
     ChatScreen(
         state = state,
         householdName = session.household.name,
+        myName = session.myName,
         myUid = session.uid,
         nameOf = session::nameOf,
         isListening = speech.isListening,
@@ -109,6 +111,7 @@ fun ChatRoute(session: SessionState.Ready) {
             }
         },
         onDismissNotice = { notice = null },
+        onOpenSettings = onOpenSettings,
         onRetry = viewModel::retry
     )
 }
@@ -117,6 +120,7 @@ fun ChatRoute(session: SessionState.Ready) {
 fun ChatScreen(
     state: ChatUiState,
     householdName: String,
+    myName: String,
     myUid: String,
     nameOf: (String) -> String,
     isListening: Boolean,
@@ -126,6 +130,7 @@ fun ChatScreen(
     onSend: () -> Unit,
     onMicClick: () -> Unit,
     onDismissNotice: () -> Unit,
+    onOpenSettings: () -> Unit,
     onRetry: () -> Unit
 ) {
     val listState = rememberLazyListState()
@@ -134,9 +139,7 @@ fun ChatScreen(
         if (state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.lastIndex)
     }
     Column(Modifier.fillMaxSize().imePadding()) {
-        ScreenHeader("Chat") {
-            Text(householdName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        ScreenHeader("Chat") { ProfileAvatarButton(myName, onClick = onOpenSettings) }
         Box(Modifier.weight(1f)) {
             when {
                 state.isLoading -> LoadingState("Loading messages…")
@@ -300,10 +303,11 @@ private fun ChatPreview() {
                 draft = "Bringing napkins"
             ),
             householdName = "Maple Street House",
+            myName = "Raheel Syed",
             myUid = "me",
             nameOf = { if (it == "me") "You" else "Rayyan Alam" },
             isListening = true, partialText = "bringing nap", notice = null,
-            onDraftChange = {}, onSend = {}, onMicClick = {}, onDismissNotice = {}, onRetry = {}
+            onDraftChange = {}, onSend = {}, onMicClick = {}, onDismissNotice = {}, onOpenSettings = {}, onRetry = {}
         )
     }
 }

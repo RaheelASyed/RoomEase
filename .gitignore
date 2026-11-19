@@ -21,3 +21,6 @@ google-services.json
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
+
+# Firebase CLI project alias (contains the project ID; repo is public)
+.firebaserc

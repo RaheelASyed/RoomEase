@@ -34,7 +34,7 @@ import androidx.navigation.compose.rememberNavController
 import edu.virginia.cs4720.roomease.RoomEaseApp
 import edu.virginia.cs4720.roomease.ui.auth.GoogleSignIn
 import edu.virginia.cs4720.roomease.ui.chat.ChatRoute
-import edu.virginia.cs4720.roomease.ui.chores.AddChoreRoute
+import edu.virginia.cs4720.roomease.ui.chores.ChoreFormRoute
 import edu.virginia.cs4720.roomease.ui.chores.ChoresRoute
 import edu.virginia.cs4720.roomease.ui.expenses.AddExpenseRoute
 import edu.virginia.cs4720.roomease.ui.expenses.ExpensesRoute
@@ -50,6 +50,8 @@ object Routes {
     const val CHAT = "chat"
     const val SETTINGS = "settings"
     const val NEW_CHORE = "chores/new"
+    const val EDIT_CHORE = "chores/edit/{choreId}"
+    fun editChore(id: String) = "chores/edit/$id"
     const val NEW_EXPENSE = "expenses/new"
     const val SCAN_RECEIPT = "expenses/new/scan"
 }
@@ -79,6 +81,16 @@ fun MainScreen(session: SessionState.Ready, onSignOut: () -> Unit) {
     val container = (context.applicationContext as RoomEaseApp).container
     val scope = rememberCoroutineScope()
 
+    // Same navigation as tapping the Settings tab (keeps each tab's back stack).
+    val openTab: (String) -> Unit = { route ->
+        navController.navigate(route) {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+    val openSettings = { openTab(Routes.SETTINGS) }
+
     // A queued write the server later rejected (e.g. by a security rule) surfaces here on any screen.
     LaunchedEffect(Unit) {
         container.writeErrors.errors.collect { snackbarHostState.showSnackbar(it) }
@@ -93,13 +105,7 @@ fun MainScreen(session: SessionState.Ready, onSignOut: () -> Unit) {
                         val selected = currentRoute == tab.route
                         NavigationBarItem(
                             selected = selected,
-                            onClick = {
-                                navController.navigate(tab.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            },
+                            onClick = { openTab(tab.route) },
                             icon = { Icon(if (selected) tab.selected else tab.unselected, contentDescription = null) },
                             label = { Text(tab.label) }
                         )
@@ -114,13 +120,29 @@ fun MainScreen(session: SessionState.Ready, onSignOut: () -> Unit) {
             modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding)
         ) {
             composable(Routes.CHORES) {
-                ChoresRoute(session = session, onNewChore = { navController.navigate(Routes.NEW_CHORE) { launchSingleTop = true } })
+                ChoresRoute(
+                    session = session,
+                    onNewChore = { navController.navigate(Routes.NEW_CHORE) { launchSingleTop = true } },
+                    onEditChore = { id -> navController.navigate(Routes.editChore(id)) { launchSingleTop = true } },
+                    onOpenSettings = openSettings
+                )
             }
             composable(Routes.NEW_CHORE) {
-                AddChoreRoute(session = session, onDone = { navController.popBackStack() })
+                ChoreFormRoute(session = session, editChoreId = null, onDone = { navController.popBackStack() })
+            }
+            composable(Routes.EDIT_CHORE) { entry ->
+                ChoreFormRoute(
+                    session = session,
+                    editChoreId = entry.arguments?.getString("choreId"),
+                    onDone = { navController.popBackStack() }
+                )
             }
             composable(Routes.EXPENSES) {
-                ExpensesRoute(session = session, onNewExpense = { navController.navigate(Routes.NEW_EXPENSE) { launchSingleTop = true } })
+                ExpensesRoute(
+                    session = session,
+                    onNewExpense = { navController.navigate(Routes.NEW_EXPENSE) { launchSingleTop = true } },
+                    onOpenSettings = openSettings
+                )
             }
             composable(Routes.NEW_EXPENSE) { entry ->
                 AddExpenseRoute(
@@ -140,7 +162,7 @@ fun MainScreen(session: SessionState.Ready, onSignOut: () -> Unit) {
                 )
             }
             composable(Routes.CHAT) {
-                ChatRoute(session = session)
+                ChatRoute(session = session, onOpenSettings = openSettings)
             }
             composable(Routes.SETTINGS) {
                 SettingsRoute(

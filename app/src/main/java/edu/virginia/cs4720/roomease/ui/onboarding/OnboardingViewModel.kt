@@ -47,7 +47,9 @@ data class OnboardingUiState(
     val isWorking: Boolean = false,
     val errorMessage: String? = null,
     val joinStatus: JoinStatus = JoinStatus.None,
-    val pendingHouseholdName: String = ""
+    val pendingHouseholdName: String = "",
+    /** This account was removed from its previous household. */
+    val wasRemoved: Boolean = false
 ) {
     val canCreate: Boolean get() = Validation.isValidHouseholdName(householdName) && !isWorking
     val canJoin: Boolean get() = InviteCodes.isWellFormed(inviteCode) && !isWorking
@@ -58,7 +60,8 @@ private data class FormState(
     val householdName: String,
     val inviteCode: String,
     val isWorking: Boolean,
-    val errorMessage: String?
+    val errorMessage: String?,
+    val wasRemoved: Boolean = false
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -74,9 +77,11 @@ class OnboardingViewModel(
             householdName = savedState["householdName"] ?: "",
             inviteCode = savedState["inviteCode"] ?: "",
             isWorking = false,
-            errorMessage = null
+            errorMessage = null,
+            wasRemoved = savedState["wasRemoved"] ?: false
         )
     )
+    private var staleCheckDone = false
     private var joinAttemptedFor: String? = null
 
     /** Watches joinRequests/{my uid} in the household I asked to join. */
@@ -103,7 +108,8 @@ class OnboardingViewModel(
             isWorking = f.isWorking,
             errorMessage = f.errorMessage,
             joinStatus = status,
-            pendingHouseholdName = savedState["pendingHouseholdName"] ?: ""
+            pendingHouseholdName = savedState["pendingHouseholdName"] ?: "",
+            wasRemoved = f.wasRemoved
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OnboardingUiState())
 
@@ -121,6 +127,20 @@ class OnboardingViewModel(
 
     fun onProfile(value: UserProfile) {
         profile.value = value
+        // Still pointing at a household we're not a member of: we were removed. Clear the pointer.
+        if (value.householdId != null && !staleCheckDone) {
+            staleCheckDone = true
+            viewModelScope.launch {
+                try {
+                    if (repository.clearStaleHousehold(value)) {
+                        savedState["wasRemoved"] = true
+                        form.update { it.copy(wasRemoved = true) }
+                    }
+                } catch (_: Exception) {
+                    staleCheckDone = false // offline: try again on the next profile update
+                }
+            }
+        }
     }
 
     fun onTabChange(tab: OnboardingTab) {

@@ -18,7 +18,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -33,6 +35,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -75,6 +80,7 @@ fun SettingsRoute(session: SessionState.Ready, onSignOut: () -> Unit) {
         onChoreViewChange = { viewModel.setChoreView(it) },
         onSplitChange = { viewModel.setSplitDefault(it) },
         onDecide = { request, approve -> viewModel.decide(request, approve, session.members.size) },
+        onRemoveMember = viewModel::removeMember,
         onCopyCode = { copyToClipboard(context, session.household.inviteCode) },
         onShareCode = { shareInvite(context, session.household) },
         onDismissMessage = viewModel::clearMessage,
@@ -93,11 +99,39 @@ fun SettingsScreen(
     onChoreViewChange: (ChoreView) -> Unit,
     onSplitChange: (SplitDefault) -> Unit,
     onDecide: (JoinRequest, Boolean) -> Unit,
+    onRemoveMember: (Member) -> Unit,
     onCopyCode: () -> Unit,
     onShareCode: () -> Unit,
     onDismissMessage: () -> Unit,
     onSignOut: () -> Unit
 ) {
+    // Which roommate the "Are you sure?" dialog is about (saved, so it survives rotation).
+    var confirmRemoveUid by rememberSaveable { mutableStateOf<String?>(null) }
+    val pendingRemoval = members.firstOrNull { it.uid == confirmRemoveUid }
+    if (pendingRemoval != null) {
+        AlertDialog(
+            onDismissRequest = { confirmRemoveUid = null },
+            title = { Text("Remove ${pendingRemoval.displayName}?") },
+            text = {
+                Text(
+                    "Are you sure? ${pendingRemoval.displayName} will immediately lose access to ${household.name}'s " +
+                        "chores, expenses and chat. Their past chores and expenses stay in the history. " +
+                        "They can ask to join again with the invite code."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRemoveMember(pendingRemoval)
+                        confirmRemoveUid = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { confirmRemoveUid = null }) { Text("Cancel") } }
+        )
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 24.dp)
     ) {
@@ -195,7 +229,21 @@ fun SettingsScreen(
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodyLarge
                             )
-                            if (member.isOwner) Text("Owner", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                            if (member.isOwner) {
+                                Text("Owner", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                            } else if (isOwner) {
+                                // Only the owner sees this; the rules also reject anyone else.
+                                IconButton(
+                                    onClick = { confirmRemoveUid = member.uid },
+                                    enabled = member.uid !in state.removingIds
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.PersonRemove,
+                                        contentDescription = "Remove ${member.displayName}",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -304,7 +352,7 @@ private fun SettingsPreview() {
             household = Household("h", "Maple Street House", "me", "4J5B9D"),
             members = listOf(Member("me", "Raheel Syed", Member.ROLE_OWNER), Member("r", "Rayyan Alam")),
             isOwner = true,
-            onThemeChange = {}, onChoreViewChange = {}, onSplitChange = {}, onDecide = { _, _ -> },
+            onThemeChange = {}, onChoreViewChange = {}, onSplitChange = {}, onDecide = { _, _ -> }, onRemoveMember = {},
             onCopyCode = {}, onShareCode = {}, onDismissMessage = {}, onSignOut = {}
         )
     }

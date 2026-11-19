@@ -102,12 +102,12 @@ Everything is denied by default. Every collection below has explicit rules in `f
 
 | Collection | Fields | Queries the app runs | Who can do what |
 |---|---|---|---|
-| `users/{uid}` | `uid, displayName, email, householdId, pendingHouseholdId, createdAt` | Listen to own doc | Only the owner can read or write it. `householdId` is **navigation state only**. It can change once, from `null` to a household where the account is a member *after the same batch*. Access to household data is always checked against `members/{uid}`. |
+| `users/{uid}` | `uid, displayName, email, householdId, pendingHouseholdId, createdAt` | Listen to own doc | Only the owner can read or write it. `householdId` is **navigation state only**. It can only go from `null` to a household where the account is a member *after the same batch*, or back to `null` once the account has been removed. Access to household data is always checked against `members/{uid}`. |
 | `inviteCodes/{code}` | `householdId, householdName, ownerId, createdAt` | `get` by typed code | Any signed-in user can `get` one code; listing is denied. The owner creates it in the household-creation batch. It can never be overwritten. |
 | `households/{hid}` | `name, ownerId, inviteCode, createdAt` | Listen to doc | Members can read. It's created atomically with the owner's member doc and its invite code. Only the owner can rename it; `ownerId` is immutable. |
-| `households/{hid}/members/{uid}` | `uid, displayName, role (owner\|member), joinedAt` | Listen to own doc (routing); list the roster | The **membership authority**. You can always `get` your own doc; members can list the roster. Create is allowed **only** for the founding owner in the creation batch, or for a joiner whose `joinRequests/{uid}` the owner has **approved**. Either way the account must have had no household before. No updates or deletes. |
+| `households/{hid}/members/{uid}` | `uid, displayName, role (owner\|member), joinedAt` | Listen to own doc (routing); list the roster | The **membership authority**. You can always `get` your own doc; members can list the roster. Create is allowed **only** for the founding owner in the creation batch, or for a joiner whose `joinRequests/{uid}` the owner has **approved**. Either way the account must have had no household before. No updates. **Only the owner can delete (remove) a member**, never themselves or another owner. |
 | `households/{hid}/joinRequests/{uid}` | `uid, displayName, email, code, status, createdAt, decidedBy, decidedAt` | Owner: `where status == pending`; joiner: listen to own doc | The joiner creates their own request with `status: pending` and the household's real code. Only the owner can change the status (once) to `approved` or `declined`. The joiner can withdraw. |
-| `households/{hid}/chores/{id}` | `title, assigneeId, assigneeName, createdBy, createdByName, dueDate, done, completedAt, createdAt` | `orderBy dueDate` (live) | Members read. A member creates with `createdBy` = themselves and an assignee who is a member. **Only the assignee** can change `done`/`completedAt`; every other field is immutable. The creator or owner can delete. |
+| `households/{hid}/chores/{id}` | `title, assigneeId, assigneeName, createdBy, createdByName, dueDate, done, completedAt, repeat (none\|daily\|weekly\|biweekly\|monthly), rotate, lastCompletedBy, lastCompletedAt, createdAt` | `orderBy dueDate` (live) | Members read. A member creates with `createdBy` = themselves and an assignee who is a member. **Only the assignee** can tick a one-off chore (`done`/`completedAt`). **Only the assignee** can complete a *repeating* chore, which moves it on in place: a later `dueDate`, the next member if it rotates, and `lastCompletedBy` = themselves at server time. Only that same person can undo it. Any member can **edit** title, assignee (must be a member), due date, repeat and rotate. `createdBy` and completion fields can't be edited. The creator or owner can delete. |
 | `households/{hid}/expenses/{id}` | `description, merchant, totalCents (int), paidBy, paidByName, participantIds (1–8 members, unique), hasReceipt, createdAt` | `orderBy createdAt desc limit 200` (live) | Members read. The payer must be the writer, every participant must be a current member, the amount is in integer cents and greater than 0, and only the listed fields are allowed (so no image bytes). Expenses are append-only; the payer can delete. |
 | `households/{hid}/messages/{id}` | `text (1–1000), senderId, senderName, createdAt` | `orderBy createdAt limitToLast 200` (live) | Members read. `senderId` must equal the writer (no forged senders), and `createdAt` must be the server time. No edits or deletes. |
 
@@ -124,7 +124,9 @@ Guessing a household ID, or even knowing the code, never grants membership.
 ### Simplifications made to stay enforceable on Spark
 - **Shares aren't stored.** Each person's share is derived from `totalCents` + `participantIds` with a deterministic split: `total / n` each, and the leftover cents go one each to participants in sorted-UID order. Rules can't loop over a map to check a sum, so storing only these two fields means the stored data can't be internally inconsistent.
 - **At most 8 participants per expense** (and the app caps households at 8). Rules check each participant's membership individually, and Firestore limits how many documents one write's rules can look up.
-- **No leave/remove member, no editing chores or expenses after creation.** This keeps "one household per account" and ownership immutable without server code.
+- **Owners can remove members; members can't leave on their own; expenses can't be edited.** A removed account's app clears its stale `householdId`; the rules allow that only once its membership doc is gone. It can then join or create a household again.
+- **Repeating chores are scheduled by the app, not a server.** When the assignee ticks one, their app moves the same chore on: one interval later and never in the past, to the next member in name order if it rotates. It isn't greyed out, and a snackbar offers Undo. The rules ensure only the assignee can do this, the date only moves forward, the new assignee is a member, and the completer is recorded truthfully. They can't check the date math itself, which is covered by unit tests.
+- **Weekly progress (Sun–Sat):** counts one-off chores completed this week and repeating chores last completed this week, out of those plus the open chores due this week (or overdue). Below it: this week's chores, then **Upcoming**, then **Completed**. Completed only lists chores completed this week, including repeating chores, which show there as well as under their next due date. It clears when the next week starts.
 
 ---
 
@@ -158,7 +160,8 @@ Guessing a household ID, or even knowing the code, never grants membership.
 | Returning users skip login | `SessionViewModel` (Firebase restores the session) |
 | Create household / join through an owner-approved invite, one household per account | `ui/onboarding/*`, `HouseholdRepository`, rules |
 | Roster and data private to current members | `firestore.rules` + rule tests |
-| Chores: create, assign, due date, assignee completes, live for the creator | `ui/chores/*`, `ChoreRepository` |
+| Chores: create, assign, due date, assignee ticks the checkbox, live for the creator; edit; delete (creator/owner, with confirmation); repeating chores with optional rotation and Undo; weekly progress and sections | `ui/chores/*`, `ChoreRepository`, `domain/ChoreSchedule.kt` |
+| Owner removes members (with an "Are you sure?" confirmation) | Settings → Members, `HouseholdRepository.removeMember`, rules |
 | Expenses: select roommates, split, ledger, integer cents, deterministic leftover | `ui/expenses/*`, `domain/ExpenseSplit.kt` |
 | Scan receipt: in-app CameraX, capture/preview/retake/review, on-device OCR, editable, manual fallback, photo stays on the device | `ui/expenses/ReceiptCamera.kt`, `ReceiptTextRecognizer`, `domain/ReceiptParser.kt` |
 | Chat: live, sender shown, pending vs synced, saved drafts | `ui/chat/*`, `ChatRepository` |
@@ -182,7 +185,7 @@ Guessing a household ID, or even knowing the code, never grants membership.
 
 ## 6. Demo checklist (Account A, Account B in the same household, Account C as an outsider)
 
-For the full step-by-step emulator test plan (about 70 checks with expected results), see [docs/MANUAL_TEST_PLAN.md](docs/MANUAL_TEST_PLAN.md).
+For the full step-by-step emulator test plan (about 80 checks with expected results), see [docs/MANUAL_TEST_PLAN.md](docs/MANUAL_TEST_PLAN.md).
 
 Use two phones or emulators, or sign out and back in on one.
 
@@ -220,9 +223,9 @@ Use two phones or emulators, or sign out and back in on one.
 | Command | Result |
 |---|---|
 | `./gradlew assembleDebug` | ✅ builds |
-| `./gradlew :app:testDebugUnitTest` | ✅ 16 tests, 0 failures (split and ledger math, money parsing, receipt parser, validation, invite codes) |
+| `./gradlew :app:testDebugUnitTest` | ✅ 28 tests, 0 failures (split and ledger math, money parsing, receipt parser, validation, invite codes, chore repeat/rotation scheduling, weekly board) |
 | `./gradlew lintDebug` | ✅ 0 errors. Remaining warnings are only "newer AGP/Gradle/Compose BOM available". I didn't upgrade the toolchain. |
-| `cd firestore-tests && npm test` | ✅ **28 rule tests pass** on the Firestore emulator: unauthenticated users, signed-in outsiders, self-granted membership, invite-code hijack, self-approval, second household, forged chore creator, non-assignee completion, assignee editing other fields, forged payer, non-member participants, fractional cents, duplicate participants, extra (image) fields, append-only ledger, forged sender IDs, message edits and deletes |
+| `cd firestore-tests && npm test` | ✅ **39 rule tests pass** (re-run after adding repeating chores, undo, edits, chore deletion and member removal) on the Firestore emulator: unauthenticated users, signed-in outsiders, self-granted membership, invite-code hijack, self-approval, second household, forged chore creator, non-assignee completion, assignee editing other fields, forged payer, non-member participants, fractional cents, duplicate participants, extra (image) fields, append-only ledger, forged sender IDs, message edits and deletes |
 
 **Smoke test on the Android 17 emulator against the local Auth + Firestore emulators.** Account A was driven through the UI; Account B and outsider C used their own ID tokens over the emulator's REST API, so the rules applied to them too.
 - ✅ A fresh launch shows Login; sign-up routes to Onboarding with the right name; A creates a household.

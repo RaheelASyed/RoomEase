@@ -102,6 +102,16 @@ fun OnboardingContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
+        if (state.wasRemoved && state.joinStatus == JoinStatus.None) {
+            SectionCard {
+                Text(
+                    "You're no longer a member of your previous household. Create a new one, or ask to join with an invite code.",
+                    modifier = Modifier.padding(16.dp).semantics { liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+
         if (state.joinStatus != JoinStatus.None) {
             JoinRequestCard(state, onCancelRequest, onRetryJoin)
             return@Column

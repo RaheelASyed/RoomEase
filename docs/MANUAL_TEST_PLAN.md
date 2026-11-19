@@ -106,8 +106,8 @@ These check the server rules through the real UI. The full rule suite runs with 
 
 - [ ] **S1 Outsider sees nothing.** As Carol (not a member), the app stays on onboarding.
   - In the Emulator UI → Firestore, Maple House's chores and messages exist, yet nothing from them appears anywhere in Carol's app.
-- [ ] **S2 Non-assignee can't complete.** On a chore assigned to Bob, Alice's checkbox is greyed out. TalkBack reads "Only Bob Roommate can complete this".
-- [ ] **S3 Rule tests pass.** Run `cd firestore-tests && npm test`. **Expected:** `pass 28`, `fail 0`.
+- [ ] **S2 Non-assignee can't complete.** On a chore assigned to Bob, Alice's card has **no checkbox** (Bob's avatar is shown instead).
+- [ ] **S3 Rule tests pass.** Run `cd firestore-tests && npm test`. **Expected:** `pass 39`, `fail 0`.
 
 ## 4. Chores (C)
 
@@ -117,14 +117,29 @@ These check the server rules through the real UI. The full rule suite runs with 
 - [ ] **C3 Date picker.** Tap the due-date button. **Expected:** a calendar where past dates can't be picked. After choosing, the button shows e.g. "Friday, Nov 20".
 - [ ] **C4 A assigns to B (core demo).** As Alice: title `Take out trash`, select **Bob Roommate**, pick a date → **Save chore**.
   **Expected:** you return to Chores. Under **All chores** the row reads "Bob Roommate · Due tomorrow" with a BR avatar.
-- [ ] **C5 B completes; A sees it live (core demo).** On Bob's device, the chore is under **My chores**. Tap its checkbox.
-  **Expected:** on Bob's device, the title is struck through and reads "Completed today".
-  - On **Alice's device, without touching anything, within a couple of seconds** the row changes to struck through, "Completed today", and the progress card shows "1 of 1 chores done".
+- [ ] **C5 B completes; A sees it live (core demo).** On Bob's device, the chore is under **My chores**. Tap its **checkbox** (tapping elsewhere on the card does nothing).
+  **Expected:** on Bob's device, the card slides smoothly down into **Completed**, greyed (no strikethrough), reading "You · Completed today".
+  - On **Alice's device, without touching anything, within a couple of seconds** the card moves to **Completed** with "Bob Roommate · Completed today", and the "This week" card goes up by one.
 - [ ] **C6 Undo.** Bob unticks the box. **Expected:** both devices show it as open again.
-- [ ] **C7 Sorting.** Create three chores with different due dates and complete one.
-  **Expected:** open chores come first (soonest due at the top); completed ones are at the bottom.
+- [ ] **C7 Sections.** Create chores due today, this Saturday, and two weeks from now, and complete one.
+  **Expected:** under the progress card (no header): today's and Saturday's chores, soonest first. Then an **Upcoming** header with the two-weeks-out chore. Then a **Completed** header. Moving between sections animates instead of jumping.
+- [ ] **C7b Weekly progress.** The card reads "This week · Nov 15 – Nov 21" (the current Sun–Sat), and the count only includes chores due or completed this week. The bar is one continuous line with no dot at the end.
 - [ ] **C8 Overdue.** In the Emulator UI, edit a chore's `dueDate` to yesterday. **Expected:** "Overdue · yesterday" in red.
 - [ ] **C9 Double-tap save.** Fill the form and tap **Save chore** twice very quickly. **Expected:** exactly one new chore.
+- [ ] **C10 Initials.** On your own chores the subtitle says "You", and the header avatar shows **your initials** (never "YO"). Other people's chores show their initials in the leading avatar.
+- [ ] **C11 Edit a chore.** Tap the ✏️ pencil on any chore (yours or someone else's) → **Edit chore** opens pre-filled → change the title, assignee and due date → **Save changes**.
+  **Expected:** the card updates on both devices; its completion state doesn't change.
+- [ ] **C12 Repeating chore.** **New chore** → `Sweep`, Repeat **Weekly**, assign to yourself → Save.
+  **Expected:** the card shows a 🔁 "Weekly" label. Tick its checkbox → it is **not** greyed out. The same chore stays yours with a due date one week later (moving to **Upcoming** if that's after Saturday). The label adds "Last done by You today", and the week progress goes up by one. A greyed copy also appears under **Completed**, reading "You · Completed today" and "Weekly · Next: You, …" (it has a check mark but no checkbox).
+- [ ] **C13 Undo.** Right after C12, a snackbar says "Sweep done · next due …" with **Undo**. Tap Undo → the chore returns to its previous due date, and the "Last done" note disappears.
+- [ ] **C14 Rotation.** **New chore** → `Dishes`, Repeat **Daily**, turn on **Rotate between roommates**, assign first to Alice.
+  **Expected:** the label reads "Daily · Rotates". When Alice ticks it, the **same chore** moves to **the next roommate in name order** (Bob in a two-person household), due the next day. The snackbar reads "Dishes done · now Bob Roommate's, due …". On Bob's device it appears under **My chores** live, with "Last done by Alice Test today".
+- [ ] **C14b Repeat chips.** In New chore, the Repeat chips are compact (normal chip height), and the wrapped second row has a visible gap above it.
+- [ ] **C16 Delete a chore.** As the chore's creator (or the owner): ✏️ → scroll down → **Delete chore** (red) → dialog "Delete "…"? Are you sure? … can't be undone." → **Cancel** keeps it → again → **Delete**.
+  **Expected:** back on Chores, the chore disappears on both devices. A member who didn't create it sees "Only the person who created this chore or the household owner can delete it." instead of the button.
+- [ ] **C17 Completed resets weekly.** **Completed** lists only chores completed this Sun–Sat, one-off and repeating, newest first. Under **My chores**, it shows the repeating chores *you* completed even after they've rotated to someone else. To check the reset, set the emulator date to next Sunday (Settings → System → Date & time) and reopen Chores.
+  **Expected:** the **Completed** section is gone, the progress card shows the new week, and repeating chores are still listed with their next due dates.
+- [ ] **C15 Rotation needs roommates.** In a one-person household, the rotate switch is disabled with "Invite roommates to rotate this chore."
 
 ## 5. Expenses and ledger (E)
 
@@ -137,7 +152,7 @@ These check the server rules through the real UI. The full rule suite runs with 
 - [ ] **E4 Amount validation.** Type `12.345`, then `abc`. **Expected:** "Enter an amount like 12.50", and **Save expense** is disabled.
 - [ ] **E5 Deselect everyone.** Untick all people. **Expected:** "Pick at least one person." and Save is disabled.
 - [ ] **E6 Ledger row details.** Tap an expense row. **Expected:** it expands to show each person's share (and the merchant, if any). Tap again to collapse.
-- [ ] **E7 Totals card.** **Expected:** "Totals (paid − share)" lists each member; the values add up to $0.00 overall.
+- [ ] **E7 Dates are capitalized.** A just-saved expense reads "Paid by You · **Today** · 2 people" (capital T). There's no Totals card at the bottom of the page.
 
 ## 6. Receipt scanning (R)
 
@@ -189,6 +204,12 @@ Set up the fake receipt first (section 0.4). A clear, flat, well-lit receipt ima
 - [ ] **P4 Survives relaunch.** Set Dark / All chores / Choose manually → swipe the app away → reopen.
   **Expected:** the app opens dark, Chores opens on All, and a new expense starts with only you selected.
 - [ ] **P5 Sign out.** Tap **Sign out** (red, at the bottom). **Expected:** the Login screen; Back doesn't return into the app.
+- [ ] **P6 Avatar opens Settings.** On Chores, Expenses and Chat, the header shows **your initials** in a circle. Tapping it opens the Settings tab (the Settings tab is highlighted in the bottom bar).
+- [ ] **P7 Owner removes a member.** As Alice (owner): Settings → Members → the red remove icon next to Bob → dialog "Remove Bob Roommate?" → **Cancel** (nothing happens) → again → **Remove**.
+  **Expected:** a message "Bob Roommate was removed from the household."; Bob disappears from the list.
+  - Bob's device leaves the app's household screens on its own and shows onboarding with "You're no longer a member of your previous household."
+  - Bob can ask to join again with the code, and Alice can approve him again.
+- [ ] **P8 Only the owner can remove.** As Bob (member), Settings → Members shows **no** remove icons, and the owner row says "Owner".
 
 ## 10. Lifecycle and interruptions (L)
 

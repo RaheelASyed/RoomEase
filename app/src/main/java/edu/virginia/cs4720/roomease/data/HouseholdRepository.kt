@@ -3,6 +3,7 @@ package edu.virginia.cs4720.roomease.data
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
 import edu.virginia.cs4720.roomease.data.model.Household
 import edu.virginia.cs4720.roomease.data.model.InviteInfo
 import edu.virginia.cs4720.roomease.data.model.JoinRequest
@@ -14,6 +15,7 @@ import edu.virginia.cs4720.roomease.data.model.toMember
 import edu.virginia.cs4720.roomease.data.model.toUserProfile
 import edu.virginia.cs4720.roomease.domain.InviteCodes
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 
@@ -39,16 +41,25 @@ class HouseholdRepository(private val db: FirebaseFirestore) {
     fun observeUser(uid: String): Flow<UserProfile?> =
         users().document(uid).snapshots().map { if (it.exists()) it.toUserProfile() else null }
 
-    /** True only when households/{hid}/members/{uid} exists: the real membership check. */
+    /**
+     * True only when households/{hid}/members/{uid} exists: the real membership check.
+     * A "missing" result that only comes from the local cache is ignored (a new phone's empty
+     * cache isn't proof); we wait for the server to confirm before treating someone as removed.
+     */
     fun observeMembership(householdId: String, uid: String): Flow<Boolean> =
-        household(householdId).collection("members").document(uid).snapshots().map { it.exists() }
+        household(householdId).collection("members").document(uid).snapshots()
+            .filter { it.exists() || !it.metadata.isFromCache }
+            .map { it.exists() }
 
     fun observeHousehold(householdId: String): Flow<Household?> =
         household(householdId).snapshots().map { if (it.exists()) it.toHousehold() else null }
 
     fun observeMembers(householdId: String): Flow<List<Member>> =
         household(householdId).collection("members").snapshots()
-            .map { snap -> snap.documents.map { it.toMember() }.sortedBy { it.displayName.lowercase() } }
+            .map { snap ->
+                // Same order on every phone: it decides who a rotating chore goes to next.
+                snap.documents.map { it.toMember() }.sortedWith(compareBy({ it.displayName.lowercase() }, { it.uid }))
+            }
 
     /** Creates a household and makes [user] its owner. Retries if the random invite code is taken. */
     suspend fun createHousehold(user: UserProfile, name: String): String {
@@ -168,6 +179,31 @@ class HouseholdRepository(private val db: FirebaseFirestore) {
                 "decidedAt" to FieldValue.serverTimestamp()
             )
         ).await()
+    }
+
+    /**
+     * Owner only (rules): removes a roommate. Their join request goes too, so they can ask to
+     * join again later with a fresh request. Their past chores and expenses stay in the history.
+     */
+    suspend fun removeMember(householdId: String, memberUid: String) {
+        db.batch()
+            .delete(household(householdId).collection("members").document(memberUid))
+            .delete(household(householdId).collection("joinRequests").document(memberUid))
+            .commit()
+            .await()
+    }
+
+    /**
+     * After being removed, users/{uid}.householdId still points at the old household.
+     * Clear it (rules allow this only once the membership doc is really gone) so the
+     * account can create or join a household again. Returns true if it was cleared.
+     */
+    suspend fun clearStaleHousehold(user: UserProfile): Boolean {
+        val hid = user.householdId ?: return false
+        val stillMember = household(hid).collection("members").document(user.uid).get(Source.SERVER).await().exists()
+        if (stillMember) return false
+        users().document(user.uid).update(mapOf("householdId" to null, "pendingHouseholdId" to null)).await()
+        return true
     }
 
     companion object {

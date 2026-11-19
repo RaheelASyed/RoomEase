@@ -44,7 +44,8 @@ async function seedHousehold() {
 
 const chore = (overrides = {}) => ({
   title: 'Trash', assigneeId: 'bob', assigneeName: 'Bob', createdBy: 'alice', createdByName: 'Alice',
-  dueDate: Timestamp.now(), done: false, completedAt: null, createdAt: now(), ...overrides,
+  dueDate: Timestamp.now(), done: false, completedAt: null, repeat: 'none', rotate: false,
+  createdAt: now(), ...overrides,
 });
 const expense = (overrides = {}) => ({
   description: 'Groceries', merchant: 'Kroger', totalCents: 1000, paidBy: 'alice', paidByName: 'Alice',
@@ -209,7 +210,6 @@ describe('owner-approved join flow', () => {
     await assertFails(bob().doc(`households/${HID}/members/bob`).update({ role: 'owner' }));
     await assertFails(bob().doc(`households/${HID}`).update({ ownerId: 'bob' }));
     await assertFails(alice().doc(`households/${HID}`).update({ ownerId: 'bob' }));
-    await assertFails(alice().doc(`households/${HID}/members/bob`).delete());
   });
 });
 
@@ -228,11 +228,11 @@ describe('chores', () => {
     await assertSucceeds(bob().doc(`households/${HID}/chores/c1`).update({ done: true, completedAt: now() }));
     await assertSucceeds(bob().doc(`households/${HID}/chores/c1`).update({ done: false, completedAt: null }));
   });
-  test('assignee cannot change anything else', async () => {
-    await assertFails(bob().doc(`households/${HID}/chores/c1`).update({ title: 'Nothing' }));
-    await assertFails(bob().doc(`households/${HID}/chores/c1`).update({ assigneeId: 'alice' }));
+  test('assignee cannot change the creator, fake completion data, or mix completion with edits', async () => {
     await assertFails(bob().doc(`households/${HID}/chores/c1`).update({ createdBy: 'bob' }));
     await assertFails(bob().doc(`households/${HID}/chores/c1`).update({ done: 'yes', completedAt: now() }));
+    await assertFails(bob().doc(`households/${HID}/chores/c1`).update({ done: true, completedAt: Timestamp.fromMillis(0) }));
+    await assertFails(bob().doc(`households/${HID}/chores/c1`).update({ done: true, completedAt: now(), title: 'x' }));
   });
 });
 
@@ -266,5 +266,103 @@ describe('messages', () => {
     await assertFails(bob().collection(`households/${HID}/messages`).add(message({ createdAt: Timestamp.fromMillis(0) })));
     await assertFails(alice().doc(`households/${HID}/messages/m1`).update({ text: 'edited' }));
     await assertFails(alice().doc(`households/${HID}/messages/m1`).delete());
+  });
+});
+
+describe('repeating chores and edits', () => {
+  const dueNow = Timestamp.fromMillis(Date.now());
+  const nextWeek = Timestamp.fromMillis(Date.now() + 7 * 864e5);
+  const seedRepeating = () => env.withSecurityRulesDisabled(async (ctx) => {
+    await ctx.firestore().doc(`households/${HID}/chores/r1`).set({
+      title: 'Sweep', assigneeId: 'bob', assigneeName: 'Bob', createdBy: 'alice', createdByName: 'Alice',
+      dueDate: dueNow, done: false, completedAt: null, repeat: 'weekly', rotate: true, createdAt: Timestamp.now(),
+    });
+  });
+  const advance = (db, by, overrides = {}) => db.doc(`households/${HID}/chores/r1`).update({
+    assigneeId: 'alice', assigneeName: 'Alice', dueDate: nextWeek, lastCompletedBy: by, lastCompletedAt: now(), ...overrides,
+  });
+
+  test('assignee completes a repeating chore: it moves on in place to the next roommate and date', async () => {
+    await seedRepeating();
+    await assertSucceeds(advance(bob(), 'bob'));
+  });
+  test('only the assignee can advance it, as themselves, to a later date and a member', async () => {
+    await seedRepeating();
+    await assertFails(advance(alice(), 'alice'));                                  // not the assignee
+    await assertFails(advance(bob(), 'alice'));                                    // forged completer
+    await assertFails(advance(bob(), 'bob', { dueDate: dueNow }));                 // date must move forward
+    await assertFails(advance(bob(), 'bob', { assigneeId: 'olivia', assigneeName: 'Olivia' })); // outsider
+    await assertFails(advance(bob(), 'bob', { lastCompletedAt: Timestamp.fromMillis(0) }));     // fake time
+  });
+  test('one-off chores cannot be advanced', async () => {
+    await assertFails(bob().doc(`households/${HID}/chores/c1`).update({
+      assigneeId: 'alice', assigneeName: 'Alice', dueDate: nextWeek, lastCompletedBy: 'bob', lastCompletedAt: now(),
+    }));
+  });
+  test('the completer can undo; nobody else can', async () => {
+    await seedRepeating();
+    await assertSucceeds(advance(bob(), 'bob'));
+    const undo = { assigneeId: 'bob', assigneeName: 'Bob', dueDate: dueNow, lastCompletedBy: null, lastCompletedAt: null };
+    await assertFails(alice().doc(`households/${HID}/chores/r1`).update({ ...undo, assigneeId: 'alice', assigneeName: 'Alice' }));
+    await assertSucceeds(bob().doc(`households/${HID}/chores/r1`).update(undo));
+  });
+  test('rejects bad repeat values on create', async () => {
+    await assertFails(alice().doc(`households/${HID}/chores/x1`).set(chore({ repeat: 'hourly' })));
+    await assertFails(alice().doc(`households/${HID}/chores/x2`).set(chore({ rotate: 'yes' })));
+    await assertFails(alice().doc(`households/${HID}/chores/x3`).set(chore({ lastCompletedBy: 'alice' })));
+  });
+  test('any member can edit chore details', async () => {
+    await assertSucceeds(alice().doc(`households/${HID}/chores/c1`).update({
+      title: 'Dishes + counters', assigneeId: 'alice', assigneeName: 'Alice', dueDate: Timestamp.now(), repeat: 'daily', rotate: true,
+    }));
+    await assertSucceeds(bob().doc(`households/${HID}/chores/c1`).update({ title: 'Dishes tonight' }));
+  });
+  test('edits cannot assign outsiders or touch completion/creator', async () => {
+    await assertFails(alice().doc(`households/${HID}/chores/c1`).update({ assigneeId: 'olivia', assigneeName: 'Olivia' }));
+    await assertFails(alice().doc(`households/${HID}/chores/c1`).update({ title: 'x', done: true, completedAt: now() }));
+    await assertFails(alice().doc(`households/${HID}/chores/c1`).update({ createdBy: 'bob' }));
+    await assertFails(alice().doc(`households/${HID}/chores/c1`).update({ title: '' }));
+    await assertFails(alice().doc(`households/${HID}/chores/c1`).update({ lastCompletedBy: 'alice', lastCompletedAt: now() }));
+    await assertFails(olivia().doc(`households/${HID}/chores/c1`).update({ title: 'hacked' }));
+  });
+});
+
+describe('deleting chores', () => {
+  test('creator or owner can delete; other members and outsiders cannot', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await ctx.firestore().doc(`households/${HID}/chores/byBob`).set({
+        title: 'Mop', assigneeId: 'alice', assigneeName: 'Alice', createdBy: 'bob', createdByName: 'Bob',
+        dueDate: Timestamp.now(), done: false, completedAt: null, createdAt: Timestamp.now(),
+      });
+    });
+    await assertFails(bob().doc(`households/${HID}/chores/c1`).delete());      // c1 was created by alice; bob is just a member
+    await assertFails(olivia().doc(`households/${HID}/chores/byBob`).delete()); // outsider
+    await assertSucceeds(bob().doc(`households/${HID}/chores/byBob`).delete()); // creator
+    await assertSucceeds(alice().doc(`households/${HID}/chores/c1`).delete());  // owner (and creator)
+  });
+});
+
+describe('removing members', () => {
+  test('owner removes a member (with their join request)', async () => {
+    const db = alice();
+    const batch = db.batch();
+    batch.delete(db.doc(`households/${HID}/members/bob`));
+    batch.delete(db.doc(`households/${HID}/joinRequests/bob`));
+    await assertSucceeds(batch.commit());
+    await assertFails(bob().collection(`households/${HID}/chores`).get());
+  });
+  test('members cannot remove anyone, and the owner cannot remove themselves', async () => {
+    await assertFails(bob().doc(`households/${HID}/members/alice`).delete());
+    await assertFails(alice().doc(`households/${HID}/members/alice`).delete());
+    await assertFails(olivia().doc(`households/${HID}/members/bob`).delete());
+  });
+  test('a removed user can clear their stale household pointer, but a current member cannot', async () => {
+    await assertFails(bob().doc('users/bob').update({ householdId: null }));
+    await assertSucceeds(alice().doc(`households/${HID}/members/bob`).delete());
+    await assertSucceeds(bob().doc('users/bob').update({ householdId: null, pendingHouseholdId: null }));
+    // ...and can then ask to join again with a fresh request
+    await assertSucceeds(bob().doc(`households/${HID}/joinRequests/bob`).set({
+      uid: 'bob', displayName: 'Bob', email: 'bob@example.com', code: CODE, status: 'pending', createdAt: now(),
+    }));
   });
 });

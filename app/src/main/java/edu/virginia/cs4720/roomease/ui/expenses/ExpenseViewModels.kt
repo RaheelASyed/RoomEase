@@ -45,8 +45,6 @@ data class ExpensesUiState(
     val expenses: List<Expense> = emptyList(),
     /** uid -> cents; positive = they owe me, negative = I owe them. */
     val balances: Map<String, Long> = emptyMap(),
-    /** Household ledger: uid -> paid minus share. */
-    val householdNet: Map<String, Long> = emptyMap(),
     val receiptsOnDevice: Set<String> = emptySet(),
     val expandedId: String? = null
 ) {
@@ -88,7 +86,6 @@ class ExpensesViewModel(
                 isLoading = false,
                 expenses = load.expenses,
                 balances = ExpenseSplit.balancesFor(myUid, load.expenses),
-                householdNet = ExpenseSplit.householdNet(load.expenses),
                 receiptsOnDevice = load.receipts,
                 expandedId = expanded
             )

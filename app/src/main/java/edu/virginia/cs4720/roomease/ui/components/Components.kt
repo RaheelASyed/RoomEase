@@ -96,6 +96,19 @@ fun Avatar(name: String, modifier: Modifier = Modifier, size: Dp = 40.dp, highli
     }
 }
 
+/** Your initials in the page header; tapping it opens Settings (48dp touch target). */
+@Composable
+fun ProfileAvatarButton(name: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    androidx.compose.material3.IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .size(48.dp)
+            .semantics(mergeDescendants = true) { contentDescription = "Profile and settings" }
+    ) {
+        Avatar(name, size = 36.dp, highlight = true)
+    }
+}
+
 /** Large page title like "Chores" / "Money" in the mockups. */
 @Composable
 fun ScreenHeader(title: String, modifier: Modifier = Modifier, trailing: @Composable () -> Unit = {}) {

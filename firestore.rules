@@ -52,8 +52,9 @@ service cloud.firestore {
         && data().get('pendingHouseholdId', null) == null
         && data().createdAt == request.time;
 
-      // householdId is navigation state, but it may only move from null to a household
-      // where this account is (after the same batch) a real member. No leaving/switching in the MVP.
+      // householdId is navigation state. It may only change in two ways:
+      //  - null -> a household where this account is (after the same batch) a real member;
+      //  - back to null once the account is no longer a member (the owner removed it).
       allow update: if signedIn() && me() == userId
         && changedKeys().hasOnly(['displayName', 'householdId', 'pendingHouseholdId'])
         && str(data().displayName, 1, 50)
@@ -61,7 +62,10 @@ service cloud.firestore {
         && (!('householdId' in changedKeys())
             || (resource.data.householdId == null
                 && data().householdId is string
-                && existsAfter(memberDoc(data().householdId, userId))));
+                && existsAfter(memberDoc(data().householdId, userId)))
+            || (data().householdId == null
+                && resource.data.householdId is string
+                && !exists(memberDoc(resource.data.householdId, userId))));
 
       allow delete: if false;
     }
@@ -131,8 +135,11 @@ service cloud.firestore {
               && get(joinRequestDoc(hid, memberId)).data.status == 'approved')
           );
 
-        // Roles and membership can't be edited or removed from the client in the MVP.
-        allow update, delete: if false;
+        // Roles can't be edited. Only the owner can remove a member, never themselves or another owner.
+        allow update: if false;
+        allow delete: if isOwner(hid)
+          && memberId != me()
+          && resource.data.role != 'owner';
       }
 
       // ----- joinRequests/{uid}: owner-approved invites tied to one account -----
@@ -167,11 +174,16 @@ service cloud.firestore {
       }
 
       // ----- chores -----
+      function validRepeat(d) {
+        return d.get('repeat', 'none') in ['none', 'daily', 'weekly', 'biweekly', 'monthly']
+            && d.get('rotate', false) is bool;
+      }
+
       match /chores/{choreId} {
         allow read: if isMember(hid);
 
         allow create: if isMember(hid)
-          && data().keys().hasOnly(['title', 'assigneeId', 'assigneeName', 'createdBy', 'createdByName', 'dueDate', 'done', 'completedAt', 'createdAt'])
+          && data().keys().hasOnly(['title', 'assigneeId', 'assigneeName', 'createdBy', 'createdByName', 'dueDate', 'done', 'completedAt', 'createdAt', 'repeat', 'rotate'])
           && data().keys().hasAll(['title', 'assigneeId', 'assigneeName', 'createdBy', 'createdByName', 'dueDate', 'done', 'completedAt', 'createdAt'])
           && data().createdBy == me()
           && str(data().title, 1, 80)
@@ -181,16 +193,46 @@ service cloud.firestore {
           && data().dueDate is timestamp
           && data().done == false
           && data().completedAt == null
+          && validRepeat(data())
           && data().createdAt == request.time;
 
-        // Only the assignee can mark it done (or undo), and only done/completedAt change.
-        // createdBy, assigneeId and every other field are immutable.
-        allow update: if isMember(hid)
-          && me() == resource.data.assigneeId
-          && changedKeys().hasOnly(['done', 'completedAt'])
-          && data().done is bool
-          && ((data().done == true && data().completedAt == request.time)
-              || (data().done == false && data().completedAt == null));
+        allow update: if isMember(hid) && (
+          // (a) Only the assignee ticks / unticks it.
+          (me() == resource.data.assigneeId
+            && changedKeys().hasOnly(['done', 'completedAt'])
+            && data().done is bool
+            && ((data().done == true && data().completedAt == request.time)
+                || (data().done == false && data().completedAt == null)))
+          ||
+          // (b) Only the assignee completes a REPEATING chore: it moves on in place to a later due date
+          //     and the next (member) assignee, stamped with who completed it and when.
+          (me() == resource.data.assigneeId
+            && resource.data.get('repeat', 'none') != 'none'
+            && changedKeys().hasOnly(['assigneeId', 'assigneeName', 'dueDate', 'lastCompletedBy', 'lastCompletedAt'])
+            && data().lastCompletedBy == me()
+            && data().lastCompletedAt == request.time
+            && isMemberUid(hid, data().assigneeId)
+            && str(data().assigneeName, 1, 50)
+            && data().dueDate is timestamp
+            && data().dueDate > resource.data.dueDate)
+          ||
+          // (c) Undo of (b): only the person who just completed it, taking it back for themselves.
+          (resource.data.get('lastCompletedBy', null) == me()
+            && data().assigneeId == me()
+            && changedKeys().hasOnly(['assigneeId', 'assigneeName', 'dueDate', 'lastCompletedBy', 'lastCompletedAt'])
+            && str(data().assigneeName, 1, 50)
+            && data().dueDate is timestamp
+            && (data().lastCompletedBy == null || data().lastCompletedBy is string)
+            && (data().lastCompletedAt == null || (data().lastCompletedAt is timestamp && data().lastCompletedAt < request.time)))
+          ||
+          // (d) Any member can edit the details. Completion state and the creator never change here.
+          (changedKeys().hasOnly(['title', 'assigneeId', 'assigneeName', 'dueDate', 'repeat', 'rotate'])
+            && str(data().title, 1, 80)
+            && str(data().assigneeName, 1, 50)
+            && isMemberUid(hid, data().assigneeId)
+            && data().dueDate is timestamp
+            && validRepeat(data()))
+        );
 
         allow delete: if isMember(hid) && (me() == resource.data.createdBy || isOwner(hid));
       }

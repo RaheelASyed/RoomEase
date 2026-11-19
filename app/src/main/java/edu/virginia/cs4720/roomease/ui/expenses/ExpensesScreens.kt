@@ -77,7 +77,7 @@ import edu.virginia.cs4720.roomease.data.model.Member
 import edu.virginia.cs4720.roomease.domain.ExpenseSplit
 import edu.virginia.cs4720.roomease.domain.Money
 import edu.virginia.cs4720.roomease.ui.chores.relativeDay
-import edu.virginia.cs4720.roomease.ui.chores.toLocalDate
+import edu.virginia.cs4720.roomease.domain.toLocalDate
 import edu.virginia.cs4720.roomease.ui.components.Avatar
 import edu.virginia.cs4720.roomease.ui.components.EmptyState
 import edu.virginia.cs4720.roomease.ui.components.ErrorState
@@ -85,6 +85,7 @@ import edu.virginia.cs4720.roomease.ui.components.LoadingState
 import edu.virginia.cs4720.roomease.ui.components.PendingSyncLabel
 import edu.virginia.cs4720.roomease.ui.components.PermissionExplainer
 import edu.virginia.cs4720.roomease.ui.components.PrimaryButton
+import edu.virginia.cs4720.roomease.ui.components.ProfileAvatarButton
 import edu.virginia.cs4720.roomease.ui.components.ScreenHeader
 import edu.virginia.cs4720.roomease.ui.components.SectionCard
 import edu.virginia.cs4720.roomease.ui.components.rememberPermissionGranted
@@ -95,7 +96,7 @@ import java.io.File
 // ---------------- Expenses tab ----------------
 
 @Composable
-fun ExpensesRoute(session: SessionState.Ready, onNewExpense: () -> Unit) {
+fun ExpensesRoute(session: SessionState.Ready, onNewExpense: () -> Unit, onOpenSettings: () -> Unit) {
     val viewModel: ExpensesViewModel = viewModel(factory = ExpensesViewModel.factory(session.householdId, session.uid))
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     ExpensesScreen(
@@ -107,6 +108,7 @@ fun ExpensesRoute(session: SessionState.Ready, onNewExpense: () -> Unit) {
         receiptFile = viewModel::receiptFile,
         onToggleExpanded = viewModel::toggleExpanded,
         onNewExpense = onNewExpense,
+        onOpenSettings = onOpenSettings,
         onRetry = viewModel::retry
     )
 }
@@ -121,6 +123,7 @@ fun ExpensesScreen(
     receiptFile: (String) -> File,
     onToggleExpanded: (String) -> Unit,
     onNewExpense: () -> Unit,
+    onOpenSettings: () -> Unit,
     onRetry: () -> Unit
 ) {
     Scaffold(
@@ -136,7 +139,7 @@ fun ExpensesScreen(
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            ScreenHeader("Expenses") { Avatar(myName, size = 36.dp, highlight = true) }
+            ScreenHeader("Expenses") { ProfileAvatarButton(myName, onClick = onOpenSettings) }
             when {
                 state.isLoading -> LoadingState("Loading expenses…")
                 state.errorMessage != null -> ErrorState(state.errorMessage, onRetry)
@@ -168,7 +171,6 @@ fun ExpensesScreen(
                                 onClick = { onToggleExpanded(expense.id) }
                             )
                         }
-                        item { HouseholdNetCard(members, state.householdNet) }
                     }
                 }
             }
@@ -259,7 +261,7 @@ private fun ExpenseRow(
                 Column(Modifier.weight(1f)) {
                     Text(expense.description, style = MaterialTheme.typography.titleMedium)
                     val payer = nameOf(expense.paidBy).let { if (it == "Former roommate") expense.paidByName else it }
-                    val date = expense.createdAt?.toLocalDate()?.let { " · ${relativeDay(it)}" }.orEmpty()
+                    val date = expense.createdAt?.toLocalDate()?.let { " · ${relativeDay(it).replaceFirstChar { c -> c.uppercase() }}" }.orEmpty()
                     Text(
                         "Paid by $payer$date · ${expense.participantIds.size} ${if (expense.participantIds.size == 1) "person" else "people"}",
                         style = MaterialTheme.typography.bodyMedium,
@@ -308,25 +310,6 @@ private fun ExpenseRow(
     }
 }
 
-@Composable
-private fun HouseholdNetCard(members: List<Member>, net: Map<String, Long>) {
-    SectionCard {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Totals (paid − share)", style = MaterialTheme.typography.titleSmall)
-            members.forEach { m ->
-                val value = net[m.uid] ?: 0L
-                Row(Modifier.fillMaxWidth()) {
-                    Text(m.displayName, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        (if (value > 0) "+" else if (value < 0) "−" else "") + Money.formatAbs(value),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (value > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun DeviceOnlyNote() {
@@ -620,12 +603,11 @@ private fun ExpensesPreview() {
             state = ExpensesUiState(
                 isLoading = false, expenses = expenses,
                 balances = ExpenseSplit.balancesFor("me", expenses),
-                householdNet = ExpenseSplit.householdNet(expenses),
                 expandedId = "1"
             ),
             myUid = "me", myName = "Raheel Syed", members = members,
             nameOf = { uid -> if (uid == "me") "You" else members.first { it.uid == uid }.displayName },
-            receiptFile = { File("none") }, onToggleExpanded = {}, onNewExpense = {}, onRetry = {}
+            receiptFile = { File("none") }, onToggleExpanded = {}, onNewExpense = {}, onOpenSettings = {}, onRetry = {}
         )
     }
 }

@@ -40,8 +40,14 @@ sealed interface SessionState {
         val householdId: String get() = household.id
         val isOwner: Boolean get() = household.ownerId == profile.uid
         val myName: String get() = members.firstOrNull { it.uid == uid }?.displayName ?: profile.displayName
+        val me: Member get() = members.firstOrNull { it.uid == uid } ?: Member(uid, profile.displayName)
+
+        /** "You" for me, otherwise the roommate's name. Use [realNameOf] for avatars/initials. */
         fun nameOf(uid: String): String =
             if (uid == this.uid) "You" else members.firstOrNull { it.uid == uid }?.displayName ?: "Former roommate"
+
+        /** The person's actual display name (never "You"); null if they're no longer a member. */
+        fun realNameOf(uid: String): String? = members.firstOrNull { it.uid == uid }?.displayName
     }
     data class Error(val message: String) : SessionState
 }

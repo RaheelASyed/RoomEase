@@ -71,6 +71,13 @@ data class Chore(
     val dueDate: Timestamp? = null,
     val done: Boolean = false,
     val completedAt: Timestamp? = null,
+    /** "none" | "daily" | "weekly" | "biweekly" | "monthly" (see domain.ChoreRepeat). */
+    val repeat: String = "none",
+    /** Repeating chores only: hand the next occurrence to the next roommate. */
+    val rotate: Boolean = false,
+    /** Repeating chores: who completed the previous occurrence, and when (they then move on in place). */
+    val lastCompletedBy: String? = null,
+    val lastCompletedAt: Timestamp? = null,
     val pendingSync: Boolean = false
 )
 
@@ -140,6 +147,10 @@ fun DocumentSnapshot.toChore(): Chore = Chore(
     dueDate = getTimestamp("dueDate"),
     done = getBoolean("done") ?: false,
     completedAt = getTimestamp("completedAt", ESTIMATE),
+    repeat = getString("repeat") ?: "none",
+    rotate = getBoolean("rotate") ?: false,
+    lastCompletedBy = getString("lastCompletedBy"),
+    lastCompletedAt = getTimestamp("lastCompletedAt", ESTIMATE),
     pendingSync = metadata.hasPendingWrites()
 )
 
